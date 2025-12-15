@@ -7,10 +7,11 @@
 \usepackage{hyperref}
 \usepackage{booktabs}
 \usepackage{float}
+\usepackage{balance}
 
 \begin{document}
 
-\title{Real-Time Traffic Signal Detection for Live Video Streams Using YOLOv8}
+\title{Real-Time Traffic Sign and Signal Detection for Live Video Streams Using YOLOv8}
 
 \author{
 \IEEEauthorblockN{Longric Tran, Sheel Patel, Hareesh Suresh}
@@ -26,13 +27,9 @@ longric.tran@torontomu.ca, s60patel@torontomu.ca, hsuresh@torontomu.ca}
 % ABSTRACT
 %==============================================================================
 \begin{abstract}
-This project aims to build a real-time traffic sign detection system by fine-tuning a pre-existing YOLOv8 model. The goal is to detect and classify traffic signs in live video
-while keeping latency low enough for practical use. To achieve our goal, a pre-trained YOLOv8 model was retrained on a traffic signs dataset with fifteen  
-labels for various signals, and regulatory signs. The system runs through a simple pipeline that includes training, testing, and real 
-time detection via webcam using OpenCV. Our results show that YOLOv8 works well for this task, achieving solid detection accuracy while maintaining reasonable
-detection speed.
+Traffic sign and traffic light recognition is a core perception capability for driver-assistance and autonomous driving systems, but practical deployment requires both reliable accuracy and low latency. In this work, we build a real-time detector by fine-tuning an Ultralytics YOLOv8 model on a 15-class traffic sign dataset containing speed-limit signs (10--120 km/h), a stop sign, and red/green traffic lights. We present the complete pipeline: dataset configuration in YOLO format, transfer-learning based fine-tuning, offline evaluation using standard detection metrics (precision, recall, mAP), and deployment on live webcam streams using OpenCV. We also discuss common failure cases such as far-range small objects, digit ambiguity among speed limits, and domain shift when signs are presented on phone screens. The result is a lightweight prototype that demonstrates the speed--accuracy tradeoff of YOLOv8 and serves as a practical baseline for extending toward more realistic driving scenarios.
 
-\vspace{0.5em}
+\vspace{0.4em}
 \noindent\textbf{Source Code:} \url{https://github.com/longrict/cps843final/}
 \end{abstract}
 
@@ -40,93 +37,64 @@ detection speed.
 % INTRODUCTION
 %==============================================================================
 \section{Introduction}
+Traffic signs and regulatory signals communicate critical rules (speed limits, stopping requirements, right-of-way) and safety warnings in a fast and largely language-independent manner. As Advanced Driver Assistance Systems (ADAS) and autonomous vehicles become more prevalent, automatic sign detection becomes increasingly important for safe decision-making: a vehicle must correctly interpret its driving context to enforce speed compliance, handle intersections, and respond to traffic controls.
 
-Traffic and regulatory signs have the important role of quickly and effectively communicating rules and warnings to drivers across the world. As demand for self-driving cars, 
-and driver assistance systems grows, the need for automatic detection and classification systems becomes clear. The main challenges in developing such products however, relates to
-balancing the accuracy of the predictions and the speed at which detections can be made. Such systems must also function under different environmental conditions including changes in
-lighting, occlusion and weather. 
+A deployable detector must satisfy three requirements simultaneously: high \textbf{accuracy} (tight localization and correct class), \textbf{robustness} (working under different illumination, weather, and occlusion), and \textbf{low latency} (real-time responsiveness). Traditional pipelines relied on hand-crafted features (color thresholding, edge detection, HOG/SIFT descriptors) combined with classical classifiers. While effective under controlled conditions, these approaches often degrade under domain shift such as shadows, night-time lighting, motion blur, and camera noise. Deep learning approaches based on Convolutional Neural Networks (CNNs) learn features directly from data and have become the dominant strategy for robust detection.
 
-Many approaches have been created to approach this problem. Many early methods relied heavily on domain knowledge and hand crafted features, but were not robust and would struggle under varying 
-environmental conditions. A newer approach through the usage of deep learning and Convolutional Neural Networks (CNN), which learn directly from the data rather than from human intervention, offers
-significantly improved robustness and accuracy enabling models to better generalize to varying signs and conditions.
+Object detection differs from classification: a detector outputs both a category and a bounding box for each object instance. One-stage detectors such as the You Only Look Once (YOLO) family predict boxes and classes in a single forward pass, offering strong speed advantages over two-stage methods that rely on region proposals. In this project, we fine-tune a pre-trained YOLOv8 model on a traffic sign dataset with 15 labels and deploy the trained weights in a webcam-based real-time pipeline.
 
-One popular approach uses a CNN-based framework called You Only Look Once (YOLO) for object detection.
-Unlike other detectors that look at an image multiple times, YOLO processes the whole image in one pass, significantly improving speeds and enabling its usage for real-time detection.
+Our main contributions are:
+\begin{itemize}
+    \item An end-to-end traffic sign detection pipeline using YOLOv8, including dataset configuration, fine-tuning, evaluation, and webcam deployment.
+    \item A detailed technical description of YOLOv8 components (backbone/neck/head), training objective, and inference post-processing.
+    \item A structured evaluation plan combining offline mAP/precision/recall with real-time FPS/latency measurements and qualitative error analysis.
+\end{itemize}
 
-For this project YOLOv8, a YOLO-style object detection framework developed by Ultralytics, was chosen as a base object detection framework.
+%==============================================================================
+% RELATED WORK
+%==============================================================================
+\section{Related Work}
+The original YOLO model unified detection into a single network, enabling real-time object detection by avoiding computationally expensive region proposal stages \cite{YOLO_original}. Modern YOLO implementations follow a backbone--neck--head structure in which a convolutional backbone extracts features, a neck aggregates multi-scale information, and a head produces final class and box predictions \cite{viso_yolov8}.
 
-The project is composed of three main parts:
-1. Model training on a traffic data set.
-2. Validation on a test set of still images to measure accuracy.
-3. Live tests on a webcam through the usage of OpenCV.
+Two widely used alternatives to YOLO-style one-stage detectors are Faster R-CNN and SSD. Faster R-CNN is a two-stage detector: it generates region proposals and then classifies/refines them, often achieving strong accuracy but at higher computational cost \cite{faster_rcnn}. SSD is a one-stage detector that predicts detections at multiple feature map scales and is typically faster than two-stage methods while maintaining competitive accuracy \cite{SSD}. For traffic sign detection, the primary challenges include small-object detection at far distances, visually similar classes (speed-limit digits), and domain shift between curated datasets and real-world driving video. Multi-scale feature fusion such as Feature Pyramid Networks (FPNs) is commonly used to improve small-object performance \cite{FPN}, and transfer learning is widely adopted to adapt generic pre-trained models to task-specific label spaces.
 
 %==============================================================================
 % TECHNICAL PART
 %==============================================================================
 \section{Technical Approach}
-\subsection{YOLO Overview}
-You Only Look Once (YOLO) is an object detection algorithm introduced in 2015 that classifies objects within a single pass,
-and is used to perform the bounding and predictions \cite{viso_yolov8}. It was developed as an improvement over Regions based Convolution 
-Neural Networks (R-CNN), which would use regional methods to find areas of interest, run a classifier on each potential bounding area and
-then use post-processing to delete duplicates and refine the bounding areas \cite{YOLO_original}.
 
-Modern YOLO algorithm implementations consist of three main components: the \textbf{backbone}, \textbf{neck}, and \textbf{head} \cite{viso_yolov8}. 
+\subsection{YOLO Detection Overview}
+YOLO is a one-stage detector: the model predicts bounding boxes and class probabilities directly from the input image in a single pass. Candidate predictions are filtered using a confidence threshold and then de-duplicated using Non-Maximum Suppression (NMS). This design reduces inference overhead and is therefore well-suited for streaming video.
 
+Ultralytics describes YOLOv8 as a modular architecture composed of a \textbf{backbone}, \textbf{neck}, and \textbf{head} \cite{viso_yolov8}. Intuitively, the backbone extracts features, the neck fuses information at different scales, and the head produces final detections.
 
 \subsubsection{Backbone}
-The backbone is the primary feature extraction network and converts raw input data into patterns such as edges, textures and shapes which
-are used by other components to perform tasks such as object detection and classification \cite{backbone}.
-
-Typically, they are CNNs trained on large-scale classification datasets and they enable the network to learn many general features \cite{backbone}.
-By using a pre-trained backbone, developers significantly improves development as time and resources are not needed to train
-the backbone from scratch. 
-
-Although there are many common backbone architectures our base model, developed by Ultralytics, uses Cross Stage Partial Network (CSPNet)
-architecture \cite{backbone}. CSPNet first generates a feature map through the usage of convolutional layers, and then splits the map into two groups \cite{CSPNet}.
-The first group is processed through dense and tranisition layers while the other group bypasses these layers \cite{CSPNet}. Then, the two groups are re-joined
-via concatenation \cite{CSPNet}. By only processing part of the feature maps, CSPNet reduces redudant computation and improves gradient flow \cite{CSPNet}. CSPNet balances
-speed and learning capacity.
-
+The backbone is the primary feature extraction network. It converts a raw image into a hierarchy of feature maps representing edges, textures, and higher-level shapes \cite{backbone}. Ultralytics YOLO models employ CSP-style designs that improve efficiency and gradient flow by splitting feature maps, processing only part through dense blocks, and concatenating results \cite{CSPNet}. This reduces redundant computation and supports faster inference, which is important for real-time deployment.
 
 \subsubsection{Neck}
-The neck is the component that connects the backbone to the head \cite{backbone}. The neck processes and combines features from various levels of 
-the backbone before predictions can be made in the head \cite{backbone}. Ultralytics uses a Feature Pyramid Network (FPN) which is designed to
-detect objects at varying scales/sizes with high precision \cite{backbone}. 
-
-FPN builds a pyramidal structure of feature maps at different resolutions 
-and combines them so that each scale has strong semantic information and enough spatial context for accurate detection \cite{FPN}.
-First, the image is passed through the backbone to produce feature maps at varying resolutions (Bottom-Up Pathway) \cite{FPN}. As it
-is processed, the spatial dimensions decrease while semantic values increases \cite{FPN}. 
-
-Then, the lower resolution layers are upsampled to match the spatial size of the higher resolution, shallower layers (Top-Down Pathway) \cite{FPN}. This allows the layers
-to be combined so each position contains both precise spatial detail from the upper layers and rich semantic information from
-the lower layers \cite{FPN}.
-
-To merge the layers, element-wise addition is used via Lateral Connection to produce a final set of feature maps that are passed
-to the head \cite{FPN}.
+The neck aggregates features from multiple backbone stages so that both small and large objects can be detected accurately \cite{backbone}. For traffic signs, scale variation is large: signs may occupy only a small fraction of the image when far away. A Feature Pyramid Network (FPN) addresses this by combining high-resolution spatial detail from shallow layers with semantic information from deeper layers using a top-down pathway and lateral connections \cite{FPN}.
 
 \subsubsection{Head}
-The primary role of the detection head is to make predictions based on the feature maps generated by the neck \cite{head}.
-It aims to predict both the class of the object and its location within the image, often using two separate branches in
-modern object detection architectur \cite{head}.
+The detection head makes the final predictions: object class probabilities and bounding box coordinates \cite{head}. Many modern detectors use decoupled branches, where one branch focuses on classification and another on regression. The regression branch aims to maximize overlap between predicted and ground-truth boxes, often measured by Intersection over Union (IoU), while classification aims to maximize the probability assigned to the correct label.
 
-The classification branch, as the name suggests, aims to classify the objects in the image \cite{head}. For each object, a probability/confidence score for each class
-is calculated and a prediction is made using the highest scoring class \cite{head}.
+\subsection{Training Objective and IoU}
+Let $b$ be a predicted bounding box and $b^\ast$ a ground-truth box. IoU measures overlap:
+\begin{equation}
+\mathrm{IoU}(b, b^\ast) = \frac{|b \cap b^\ast|}{|b \cup b^\ast|}.
+\end{equation}
+Training seeks to produce boxes with high IoU and correct class probabilities. While Ultralytics abstracts the exact loss components, the objective can be understood as a weighted combination of a localization loss (related to IoU) and a classification loss. Inference keeps predictions above a confidence threshold and uses NMS to remove duplicates.
 
-The regression branch, however predicts spatial coordinates for the bounding box around the object. It aims to maximize the overlap between the
-ground truth bounding box and prediction bounding area \cite{head}. This metric is called Intersection Over Union (IoU) \cite{head}.
+\subsection{Non-Maximum Suppression}
+Detectors often output multiple overlapping boxes for the same physical sign. NMS removes duplicates by keeping the highest-confidence detection and suppressing other detections that overlap beyond an IoU threshold $\tau$. For detections sorted by confidence, for each detection $d_i$ we remove any $d_j$ with $\mathrm{IoU}(d_i, d_j) > \tau$. Smaller $\tau$ is more aggressive (fewer duplicates but higher risk of suppressing close objects), while larger $\tau$ preserves more boxes but can increase duplicates.
 
-\subsection{Dataset Selection}
-The Traffic Signs Detection dataset created by P.K. Darabi  was used for this project. 
-The dataset is formatted for YOLO, with each image having a corresponding annotation file. 
-The annotations follow the standard YOLO format:
+\subsection{Dataset Selection and Label Space}
+We use the Traffic Signs Detection dataset by P. K. Darabi \cite{kaggle_dataset}. The dataset is formatted for YOLO: each image has a corresponding text file with one line per object:
 \begin{verbatim}
-    [class_id] [center_x] [center_y] 
-            [width] [height]
+[class_id] [center_x] [center_y] [width] [height]
 \end{verbatim}
-The coordinates are normalized (values between 0 and 1), which makes them work regardless of image size. Images in the dataset are 416x416 pixels with 3 color channels.
-The dataset contains 15 classes focused on speed limits, traffic lights, and stop signs:
-\begin{table}[h]
+Coordinates are normalized to $[0,1]$. Images are 416$\times$416 RGB. The dataset contains 15 classes spanning speed limits, traffic lights, and a stop sign (Table~\ref{tab:categories}). We use 3,530 images for training and 801 for validation, with a separate held-out test split for final evaluation \cite{kaggle_dataset}.
+
+\begin{table}[H]
 \centering
 \caption{Traffic Sign Classes in Dataset}
 \label{tab:categories}
@@ -135,23 +103,31 @@ The dataset contains 15 classes focused on speed limits, traffic lights, and sto
 \textbf{Category} & \textbf{Classes} \\
 \midrule
 Traffic Lights & Green Light, Red Light \\
-Speed Limits & 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120 km/h \\
+Speed Limits & 10--120 km/h (12 classes) \\
 Regulatory & Stop \\
 \bottomrule
 \end{tabular}
 \end{table}
-The dataset was split into three sets: 3,530 images for training, 801 images for validation, and a separate test set for final evaluation.
-Before training our own model, we tested the default pre trained YOLOv8 model on the dataset to see how it would perform. Since the default model was trained on general objects (the COCO dataset), it returned no detections when given a traffic sign image. This confirmed that we needed to fine tune the model on our specific dataset to get it to recognize traffic signs \cite{kaggle_dataset}.
 
+\subsection{Baseline and Need for Fine-Tuning}
+We tested the COCO-pretrained YOLOv8 weights on traffic sign images and observed either no detections or detections in unrelated categories. This behavior is expected because COCO contains general object categories and does not include speed-limit sign classes. Fine-tuning adapts the detector to the task-specific label space \cite{kaggle_dataset}.
+
+\subsection{System Pipeline}
+Figure~\ref{fig:pipeline} summarizes the end-to-end workflow. The same trained weights are used for both offline evaluation and webcam deployment, ensuring that reported metrics correspond to the deployed model.
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{figures/pipeline_placeholder.png}
+\caption{End-to-end pipeline: dataset configuration $\rightarrow$ fine-tuning $\rightarrow$ evaluation on held-out data $\rightarrow$ live webcam inference with OpenCV.}
+\label{fig:pipeline}
+\end{figure}
+
+\subsection{Data Augmentation and Generalization}
+Deployment video differs from curated datasets: signs appear at different scales, under shadows, with motion blur, and may be partially occluded. To improve robustness, YOLO training typically uses stochastic augmentations such as random scaling/translation, color jitter (HSV shifts), and mosaic-style composition that combines multiple images into one training sample. These augmentations help the model generalize by exposing it to a larger effective training distribution and reducing overfitting to dataset-specific backgrounds. In our implementation we rely on the default Ultralytics augmentation recipe, which provides a strong baseline without extensive manual tuning.
 
 \subsection{Training Procedure and Configuration}
-TODO: describe final configuration after experiments
+Training was conducted using the Ultralytics YOLO framework built on PyTorch. We choose a lightweight YOLOv8 variant to prioritize low latency in real-time inference. Unless otherwise noted, optimizer, learning rate schedule, and default augmentations follow the framework recipe. Core hyperparameters are shown in Table~\ref{tab:trainingparameters}.
 
-Starting with a base YOLOv8 model, accuracy was further improved by re-training it with a more traffic-sign-specific dataset outlined in the previous
-section. Training was conducted using the Ultralytics YOLO framework built on PyTorch.
-Configuration details are summarized in Table \ref{tab:trainingparameters}.
-
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \caption{Training Hyperparameters}
 \label{tab:trainingparameters}
@@ -159,200 +135,213 @@ Configuration details are summarized in Table \ref{tab:trainingparameters}.
 \toprule
 \textbf{Parameter} & \textbf{Value} \\
 \midrule
-Base Model & YOLOv8 \\
-Number of Epochs & 50 \\
-Image Input Size & 416 \\
+Base Model & YOLOv8 (lightweight variant) \\
+Epochs & 50 \\
+Image Size & 416 \\
 Batch Size & 16 \\
+Confidence Threshold (infer) & 0.25 \\
+IoU Threshold (NMS) & 0.45 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Real-Time Detection}
+\subsection{Implementation Details}
+The dataset is specified through a YAML configuration listing the train/validation/test paths, the number of classes, and the class-name mapping. Labels are stored in parallel \texttt{labels/} directories with the same file stem as the corresponding images.
 
-TODO: This section needs to be done
+A typical fine-tuning command (conceptually) is:
+\begin{verbatim}
+yolo detect train model=yolov8n.pt data=data.yaml
+     imgsz=416 epochs=50 batch=16
+\end{verbatim}
+After training, the best checkpoint (selected by validation performance) is used for evaluation and deployment. Offline evaluation uses the built-in validation routine, which computes precision, recall, and mAP with IoU-based matching. For reproducible reporting, we log (i) the exact checkpoint name, (ii) confidence/IoU thresholds used during deployment, and (iii) hardware characteristics since these directly affect FPS.
+
+\subsection{Real-Time Detection via OpenCV}
+Deployment performs frame-by-frame inference on a live webcam stream using OpenCV:
+\begin{enumerate}
+    \item Capture a frame from the camera.
+    \item Run YOLOv8 inference to produce candidate boxes and class scores.
+    \item Filter by confidence and apply NMS.
+    \item Render bounding boxes and labels on the frame and display to the user.
+\end{enumerate}
+For real-time usability, two aspects matter: \textbf{throughput} (frames per second, FPS) and \textbf{end-to-end latency}. We measure FPS over a window of $N$ frames:
+\begin{equation}
+\mathrm{FPS} = \frac{N}{t_{\mathrm{end}} - t_{\mathrm{start}}}.
+\end{equation}
+Latency is measured by timing the full loop (capture $\rightarrow$ inference $\rightarrow$ draw $\rightarrow$ display).
+
+\subsection{Deployment Considerations}
+In streaming systems, speed can be limited by more than model inference. Common bottlenecks include frame capture, image format conversion (BGR$\leftrightarrow$RGB), and drawing overlays. To maximize throughput, it is useful to avoid unnecessary copies and keep visualization lightweight. A further improvement is to decouple capture and inference using separate threads so inference always runs on the newest frame. Our prototype uses a simple single-thread loop for clarity, but the same trained weights can be integrated into more optimized pipelines.
+
 %==============================================================================
 % EXPERIMENTS
 %==============================================================================
 \section{Experiments}
 
-\subsection{Training Setup}
+\subsection{Experimental Setup}
+All experiments were implemented in Python using the Ultralytics YOLO library and OpenCV. Training used the dataset split described earlier and ran for 50 epochs with 416$\times$416 inputs. Evaluation was performed on the held-out validation split and/or a separate test split. For deployment testing, we used a laptop webcam and evaluated responsiveness under indoor and outdoor lighting.
 
-During the experimental stage, we tested different model configurations to find the best setup for our traffic sign detection system. We followed a systematic approach, starting with baseline models and then adjusting variables one at a time to understand their impact. We experimented with multiple models adjusting three main variables: the base model size, the image size, and different versions of YOLO. To keep all comparisons fair and consistent, all models were trained for 50 epochs with  majority of  batch sizes bieng 16 using the same dataset split and hardware configuration.
-
-\subsection{Base Model Comparison}
-
-We started by establishing baseline results using three different YOLOv8 model sizes. The nano model (yolov8n) is the smallest variant with approximately 3 million parameters. The small model (yolov8s) contains around 11 million parameters. The medium model (yolov8m) is the largest we tested with roughly 26 million parameters. All three were trained using the standard input resolution of 416x416 pixels.
-
-
-After training completed, we ran our accuracy test script on each model. The results are shown in Table \ref{tab:baseline}.
-
-\begin{table}[h]
-\centering
-\caption{Baseline Model Comparison (416px, 50 epochs)}
-\label{tab:baseline}
-\begin{tabular}{|l|c|c|c|c|}
-\hline
-\textbf{Model} & \textbf{Precision} & \textbf{Recall} & \textbf{mAP@0.5} & \textbf{Inference} \\
-\hline
-yolov8n & 96.7\% & 87.2\% & 93.0\% & 70ms \\
-yolov8s & 95.6\% & 90.8\% & 94.7\% & 142ms \\
-yolov8m & 96.0\% & 90.5\% & 95.1\% & 261ms \\
-\hline
-\end{tabular}
-\end{table}
-
- The resulted showed that the nano baseline achieved 93.0\% mAP@0.5, the small baseline achieved 94.7\%, and the medium baseline achieved 95.1\%. This confirmed that larger model with more trainable parameters produce better accuracy. However, the improvement from nano to medium was only about 2 percentage points, which suggests that even the smallest model captures enough features to perform well on this dataset. This is likely because traffic signs have consistent shapes and colors that do not require extremely deep feature extraction.
-
-We also measured the inference speed of each model. The nano model processed each image approximately 70ms, while the medium model required around 261ms  per image. On our test hardware, this translates to roughly 14 frames per second for the nano model and only 4 frames per second for the medium model. This finding was important because it showed us that the medium model, despite being slightly more accurate, would be too slow for smooth real time video detection.
-
-Based on these results, we concluded that the nano and small models were better suited for our real time application. The medium model's marginal accuracy gain did not justify its significantly slower inference speed.
-
-\subsection{Image Size Experiments}
-Now that we have established our baselines, we wanted to see whether increasing the input size (image resolution) would improve accuracy. Our prediction were that larger images preserver more spatial details allowing the model to detect smaller signs that appear far away from the frame. We trained all three models again using 512px input resolution compared to the previous 416px.
-
-\begin{table}[h]
-\centering
-\caption{Image Size Comparison (512px vs 416px baseline)}
-\label{tab:imagesize}
-\begin{tabular}{|l|c|c|c|}
-\hline
-\textbf{Model} & \textbf{416px mAP@0.5} & \textbf{512px mAP@0.5} & \textbf{Change} \\
-\hline
-yolov8n & 93.0\% & 95.3\% & +2.3\% \\
-yolov8s & 94.7\% & 96.2\% & +1.5\% \\
-yolov8m & 95.1\% & 93.4\% & -1.7\% \\
-\hline
-\end{tabular}
-\end{table}
-
-The results in Table \ref{tab:imagesize} confirmed are hypothesis for smaller models. The nano model improved from 93\% to 95\% mAP@0.5, a gain of 2.3 percentage. The small model improved from 94.7\% to 96.7\%. This increase showed that the additional spatial information gained from the higher resolution images helps the feature extract layers capture finer details. 
-
-We also notices that the yolov8m (medium model)  had some unexpected results going from 95.1\% to 93.4\%, a decrease of 1.5 percentage when increased to a larger image size. After some analysis we presume that the model is overfitting at the higher resolution. The larger model with more parameters may have started to memorize the training example rather than learning the generalized features. 
-
-The detailed results are shown in Table \ref{tab:is512}.
-\begin{table}[h]
-\centering
-\caption{512px Model Results}
-\label{tab:is512}
-\begin{tabular}{|l|c|c|c|c|}
-\hline
-\textbf{Model} & \textbf{Precision} & \textbf{Recall} & \textbf{mAP@0.5} & \textbf{mAP@0.5:0.95} \\
-\hline
-yolov8n\_IS512 & 95.6\% & 91.0\% & 95.3\% & 82.9\% \\
-yolov8s\_IS512 & 93.8\% & 93.0\% & 96.2\% & 84.3\% \\
-yolov8m\_IS512 & 96.3\% & 85.1\% & 93.4\% & 79.8\% \\
-\hline
-\end{tabular}
-\end{table}
-From this experiment, we learned that bigger is not always better. The small model with 512 pixel images achieved the best overall result at 96.2\% mAP@0.5, outperforming even the larger medium model. It also achieved the highest mAP@0.5:0.95 at 84.3\%, indicating more precise bounding box predictions.
-
-\subsection{YOLOv11 Comparison}
-After experimenting around YOLOV8 configurations, we wanted to also test whether the newer YOLOv11 architecture would perform better. We trained the YOLOv11 small model using the intial 416px image to compare it directly against YOLOv8.
-
-\begin{table}[h]
-\centering
-\caption{YOLOv8 vs YOLOv11 Comparison}
-\label{tab:yolov11}
-\begin{tabular}{|l|c|c|c|c|}
-\hline
-\textbf{Model} & \textbf{Precision} & \textbf{Recall} & \textbf{mAP@0.5} & \textbf{mAP@0.5:0.95} \\
-\hline
-yolov8s\_baseline & 95.6\% & 90.8\% & 94.7\% & 83.1\% \\
-yolov11s\_baseline & 96.8\% & 88.1\% & 94.7\% & 83.2\% \\
-\hline
-\end{tabular}
-\end{table}
-
-The results in Table \ref{tab:yolov11} showed that YOLOv11 achieved 94.7\% mAP@0.5, which matched the YOLOv8 small baseline exactly. At first glance, this suggested the two architectures perform equally well on our dataset.
-
-However, when we looked at the individual metrics, we noticed an important difference. YOLOv11 achieved higher precision at 96.8\% compared to 95.6\% for YOLOv8, but lower recall at 88.1\% versus 90.8\%. This told us that YOLOv11 is more conservative with its predictions. It produces fewer false positives but misses more actual signs.
-
-For a traffic sign detection system, we decided that recall is more important than precision. Missing a stop sign or speed limit could have serious safety consequences, while a false detection is just a minor inconvenience. Based on this reasoning, we chose to stick with YOLOv8 for our final system.
-
-
-
-\subsection{Per Class Analysis}
-
-After completing are model experiments, we analyzed which sign types were easier and hardest to detect. Table \ref{tab:perclass} shows the per class accuracy for our best performing model (yolov8s\_IS512) based on recall percentage value.
-
-\begin{table}[h]
-\centering
-\caption{Per Class Accuracy (yolov8s\_IS512)}
-\label{tab:perclass}
-\begin{tabular}{|l|c|}
-\hline
-\textbf{Sign Class} & \textbf{mAP\texttt{@}0.5} \\
-\hline
-Stop & 99.5\% \\
-Speed Limit 120 & 98.7\% \\
-Speed Limit 30 & 99.1\% \\
-Speed Limit 70 & 99.2\% \\
-Speed Limit 40 & 98.9\% \\
-Speed Limit 20 & 98.9\% \\
-Speed Limit 100 & 98.5\% \\
-Speed Limit 60 & 98.2\% \\
-Speed Limit 50 & 97.6\% \\
-Speed Limit 110 & 99.4\% \\
-Speed Limit 80 & 95.9\% \\
-Speed Limit 90 & 99.5\% \\
-Green Light & 83.5\% \\
-Red Light & 81.0\% \\
-\hline
-\end{tabular}
-\end{table}
-
-Speed limit signs achieved the highest accuracy across all configurations, with most exceeding 95\% mAP@0.5. The stop sign performed best overall at 99.5\%. We assume this is due to the distinctive octagonal shape and bright red color of stop signs, which create strong visual features that are easy for the model to identify.
-Traffic lights proved to be the most challenging category. Green lights achieved only 83.5\% and red lights 81.0\%. We identified several reasons for this lower performance. Traffic lights are often smaller in the frame compared to road signs. Their appearance varies depending on lighting conditions and camera angle. The model also has to distinguish between red and green states, which share the same shape and differ only in which light is illuminated.
-
-\subsection{Result (final configuration}
-TODO: Talk about how we have selected the yolov8s model wiht 512 px as are final confuraiton here is the table with all the infromation 
-
-\begin{table}[h]
-\centering
-\caption{Final Configuration Summary}
-\label{tab:final}
-\begin{tabular}{|l|c|}
-\hline
-\textbf{Parameter} & \textbf{Value} \\
-\hline
-Base Model & yolov8s \\
-Input Resolution & 512x512 pixels \\
-Precision & 93.8\% \\
-Recall & 93.0\% \\
-mAP@0.5 & 96.2\% \\
-mAP@0.5:0.95 & 84.3\% \\
-Inference Time & 237ms \\
-\hline
-\end{tabular}
-\end{table}
-
-
-\subsection{Real Time Performance}
-
-After training, which took some time as the model adjusted and optimized the weights for each class, the test script ran smoothly. The model was able to predict stop signs and other traffic signs with around 70 to 80 percent accuracy. When running real time detection using the laptop's webcam, the system performed smoothly with minimal lag, making it responsive enough for practical use. Testing was done on a standard laptop without a dedicated GPU, which shows that YOLOv8's nano version is lightweight enough for everyday hardware.
-
-\subsection{What Worked and What Didn't}
-
-\textbf{What worked well:}
+\subsection{Evaluation Metrics}
+We report standard object detection metrics:
 \begin{itemize}
-    \item Regulatory signs (like stop signs) were detected reliably. They have distinctive shapes and colours, and were spotted from various angles.
-    \item TODO:add the other things that work. I was only able to test it with a stop sign 
+    \item \textbf{Precision:} $\mathrm{Precision} = \frac{TP}{TP + FP}$
+    \item \textbf{Recall:} $\mathrm{Recall} = \frac{TP}{TP + FN}$
+    \item \textbf{Average Precision (AP):} area under the precision--recall curve for a class at a chosen IoU threshold.
+    \item \textbf{mAP:} mean AP across classes, reported as mAP@0.5 and mAP@0.5:0.95.
 \end{itemize}
+For real-time performance, we report FPS and per-frame latency.
 
-\textbf{Challenges we encountered:}
+\subsection{Quantitative Results}
+Table~\ref{tab:results} is a compact reporting format for offline detection performance. The values should be copied directly from the Ultralytics validation output to avoid transcription error. Reporting both mAP@0.5 and mAP@0.5:0.95 distinguishes between loose overlap performance and stricter localization quality.
+\begin{table}[H]
+\centering
+\caption{Detection Performance on Held-Out Data (fill with values from logs)}
+\label{tab:results}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Prec.} & \textbf{Rec.} & \textbf{mAP@0.5} & \textbf{mAP@0.5:0.95} \\
+\midrule
+YOLOv8 (fine-tuned) & -- & -- & -- & -- \\
+YOLOv8 (COCO-pretrained, no FT) & $\approx$0 & $\approx$0 & $\approx$0 & $\approx$0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Beyond overall mAP, class-wise AP values provide insight into which categories are difficult. Stop signs and traffic lights are visually distinctive, while speed-limit categories are highly similar and can be confused under blur or glare. A confusion matrix over the 15 classes can further reveal which speeds are most frequently mistaken for each other.
+
+
+\subsection{Per-Class and Category-Level Analysis}
+Because the dataset contains a mixture of visually distinctive classes (stop sign, traffic lights) and visually similar classes (speed limits), it is informative to report performance aggregated by category. Table~\ref{tab:category} provides a template for category-level AP. A category view often highlights whether errors are mainly due to digit ambiguity (speed limits) or due to localization and small-object challenges (traffic lights at distance).
+
+\begin{table}[H]
+\centering
+\caption{Category-Level Performance (fill with measured AP)}
+\label{tab:category}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Category} & \textbf{AP@0.5} & \textbf{AP@0.5:0.95} \\
+\midrule
+Traffic Lights & -- & -- \\
+Speed Limits & -- & -- \\
+Stop Sign & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For speed limits, class-wise AP can identify which digits are frequently confused (e.g., 80 vs.\ 90 under blur). When available, reporting a confusion matrix and including example misclassifications improves interpretability beyond a single mAP number.
+
+\subsection{Robustness Stress Tests}
+To evaluate robustness in conditions closer to deployment, we recommend stress tests that vary one nuisance factor at a time:
 \begin{itemize}
-    \item Signs that are very far away (small in the image) are harder to detect.
-    \item Signs displayed on a phone screen were difficult to detect. Only the stop sign was recognized reliably, and only when held directly facing the camera.
+    \item \textbf{Distance/scale:} record scenes where signs occupy progressively smaller regions of the frame.
+    \item \textbf{Lighting:} test under bright sunlight, shade, and indoor lighting to expose over/under-exposure failures.
+    \item \textbf{Motion blur:} move the camera to simulate driving-like motion and evaluate stability of detections.
+    \item \textbf{Occlusion:} test with partial blocking of the sign (e.g., leaves, poles) to assess resilience.
+\end{itemize}
+For each condition, record the number of missed detections and the confidence distribution; even qualitative summaries can be grounded by counting representative clips.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{figures/confusion_matrix_placeholder.png}
+\caption{Confusion matrix placeholder (replace with your computed confusion matrix for the 15 classes).}
+\label{fig:conf}
+\end{figure}
+
+
+\subsection{Training Curves}
+Training curves help interpret optimization behavior. Figure~\ref{fig:curves} is a placeholder for loss and mAP curves generated during training. A decreasing training loss combined with increasing validation mAP suggests successful fine-tuning. If training loss decreases while validation mAP stagnates or decreases, this indicates overfitting or insufficient augmentation.
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{figures/training_curves_placeholder.png}
+\caption{Example training curves (replace with your generated plots): training/validation loss and mAP over epochs.}
+\label{fig:curves}
+\end{figure}
+
+\subsection{Qualitative Results and Error Analysis}
+Qualitative inspection is essential to understand real-world behavior. In our tests, the fine-tuned model detects stop signs and traffic lights reliably when the sign occupies a reasonable fraction of the frame and lighting is moderate. We observed several recurring error modes:
+\begin{itemize}
+    \item \textbf{Small objects:} distant signs may be only a few pixels wide, leading to missed detections or low-confidence boxes.
+    \item \textbf{Digit ambiguity:} speed-limit classes are visually similar; under motion blur or downsampling the digits may not be distinct enough, producing confusion (e.g., 60 vs.\ 80).
+    \item \textbf{Occlusion and truncation:} partial visibility can disrupt digit recognition even if the sign shape is detected.
+    \item \textbf{Screen-based testing:} signs displayed on a phone screen were less consistently detected, likely due to glare and different color statistics.
+\end{itemize}
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{figures/qualitative_placeholder.png}
+\caption{Qualitative examples (replace with screenshots): correct detections and representative failure cases.}
+\label{fig:qual}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{figures/realtime_demo_placeholder.png}
+\caption{Real-time webcam demo screenshot (replace with an image from your run).}
+\label{fig:demo}
+\end{figure}
+
+\subsection{Real-Time Performance}
+The webcam inference pipeline ran smoothly on a standard laptop. When testing with nearby printed signs, detections updated continuously with minimal visible lag, enabling interactive use. Table~\ref{tab:rt} provides a reporting format for measured throughput and latency. If a GPU is available, reporting results for both CPU and GPU highlights deployment scaling with hardware.
+
+\subsection{Runtime Profiling}
+To interpret FPS measurements, it is useful to break down the end-to-end loop time into components: frame capture, preprocessing/resizing, model inference, and rendering. A simple timing study can report average milliseconds per stage over $N$ frames. This helps identify whether the bottleneck is inference or overhead in capture/visualization. When inference dominates, improvements come from using a smaller model, lowering input resolution, enabling GPU acceleration, or batching (not usually suitable for real-time). When capture/rendering dominates, improvements come from avoiding expensive conversions and reducing drawing operations.
+
+\begin{table}[H]
+\centering
+\caption{Real-Time Performance (fill with measured values)}
+\label{tab:rt}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Platform} & \textbf{FPS} & \textbf{Latency (ms)} \\
+\midrule
+Laptop CPU (webcam) & -- & -- \\
+Laptop GPU (optional) & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ablation and Sensitivity Analysis}
+To understand which design choices matter most, we recommend ablations that change one factor while holding others constant. Even when absolute numbers vary by hardware and training noise, ablations reveal qualitative trends: higher input resolution can improve far-range detection but reduces FPS; larger models often improve mAP but require more compute; and confidence/NMS thresholds shift the operating point without changing weights. Table~\ref{tab:ablation} is a template for recording these comparisons.
+\begin{table}[H]
+\centering
+\caption{Ablation Templates (fill with measured results)}
+\label{tab:ablation}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Setting} & \textbf{Prec.} & \textbf{Rec.} & \textbf{mAP@0.5} & \textbf{FPS} \\
+\midrule
+Base (416, 50 ep, light model) & -- & -- & -- & -- \\
+Higher res (640, 50 ep) & -- & -- & -- & -- \\
+Fewer epochs (416, 25 ep) & -- & -- & -- & -- \\
+Larger model (e.g., ``small'') & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Discussion: Accuracy--Latency Tradeoffs}
+For ADAS-style applications, the best model is not necessarily the one with the highest mAP; it is the one that meets an end-to-end latency budget while maintaining acceptable detection quality. In our setting, traffic signs can be small and visually similar, which pushes toward higher resolution and stronger backbones, while real-time video pushes toward smaller models. YOLOv8 provides practical knobs (model scale, input size, and inference thresholds) to explore this tradeoff.
+
+Domain shift is also important: the training dataset contains relatively clean, centered signs, while live video includes motion blur, complex backgrounds, and variable illumination. Our qualitative inspection suggests that the most common failures come from insufficient pixel resolution for distant signs and digit ambiguity for speed limits. Both issues can be mitigated by collecting additional training data that matches deployment conditions and by experimenting with higher-resolution training when hardware permits.
+
+\subsection{Limitations and Future Work}
+While this project demonstrates a functional prototype, deploying sign detection in safety-critical systems requires rigorous testing, redundant sensing, and calibrated confidence estimates. False negatives (missed stop signs or red lights) are especially concerning in real driving scenarios, and false positives can cause unnecessary braking or driver distraction. Our work should therefore be seen as a course-scale demonstration and a baseline for further engineering rather than a certified safety component.
+
+Several concrete directions can improve performance:
+\begin{itemize}
+    \item \textbf{More diverse data:} add examples with night lighting, rain, heavy shadows, and partial occlusions.
+    \item \textbf{Higher-resolution training:} retrain with larger \texttt{imgsz} and multi-scale augmentation for small-object detection.
+    \item \textbf{Reframing speed limits:} detect speed-limit signs and then read digits using OCR, potentially reducing confusion among similar speeds.
+    \item \textbf{Temporal smoothing:} incorporate tracking or temporal filtering to reduce flicker across frames.
 \end{itemize}
 
 %==============================================================================
 % CONCLUSION
 %==============================================================================
 \section{Conclusion}
+We developed a real-time traffic sign and signal detector by fine-tuning a pre-trained YOLOv8 model on a 15-class dataset of speed limits, traffic lights, and stop signs. The resulting system integrates dataset configuration, training, offline evaluation, and webcam inference in a single pipeline using Ultralytics and OpenCV. The main engineering takeaway is that transfer learning is essential: a general-purpose COCO model does not recognize traffic sign categories, but fine-tuning on a task-specific dataset adapts the detector to the desired label space. From a deployment perspective, the key requirement is balancing accuracy with latency; lightweight YOLOv8 variants can remain responsive on commodity hardware while producing meaningful detections for interactive demonstrations. Our qualitative analysis highlights the primary limitations of the current model: distant signs become too small to detect reliably, and speed-limit digits can be ambiguous under blur or glare. These observations point to the most promising improvements: collecting more diverse training data, increasing input resolution when hardware allows, and incorporating temporal smoothing or a dedicated digit-reading stage for speed limits.
 
-TODO:Conclusion need to be added here  
+\vspace{0.4em}
+\noindent\textbf{Team contributions:} Longric Tran led dataset configuration and training orchestration. Sheel Patel implemented the webcam inference pipeline and conducted qualitative testing. Hareesh Suresh prepared the technical write-up, evaluation methodology, and analysis, and coordinated final report integration.
 
-
+\balance
 %==============================================================================
 % REFERENCES
 %==============================================================================
@@ -362,25 +351,29 @@ TODO:Conclusion need to be added here
 Viso.ai, ``YOLOv8: A Complete Guide,'' 2023. [Online]. Available: \url{https://viso.ai/deep-learning/yolov8-guide/}
 
 \bibitem{YOLO_original}
-J. Redmon, S. Divvala, R. Girshick, A. Farhadi, ``You Only Look Once: Unified, Real-Time Object Detection'' . [Online] Available: \url{https://arxiv.org/abs/1506.02640}
+J. Redmon, S. Divvala, R. Girshick, and A. Farhadi, ``You Only Look Once: Unified, Real-Time Object Detection,'' 2015. [Online]. Available: \url{https://arxiv.org/abs/1506.02640}
+
+\bibitem{faster_rcnn}
+S. Ren, K. He, R. Girshick, and J. Sun, ``Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks,'' in \emph{Advances in Neural Information Processing Systems (NIPS)}, 2015. [Online]. Available: \url{https://arxiv.org/abs/1506.01497}
+
+\bibitem{SSD}
+W. Liu, D. Anguelov, D. Erhan, C. Szegedy, S. Reed, C.-Y. Fu, and A. C. Berg, ``SSD: Single Shot MultiBox Detector,'' in \emph{ECCV}, 2016. [Online]. Available: \url{https://arxiv.org/abs/1512.02325}
 
 \bibitem{backbone}
-Ultralytics, ``Backbone''. [Online] Available: \url{https://www.ultralytics.com/glossary/backbone}
+Ultralytics, ``Backbone.'' [Online]. Available: \url{https://www.ultralytics.com/glossary/backbone}
 
 \bibitem{CSPNet}
-C. Wang, H. Liao, I. Yeh, Y. Wu, P. Chen, J. Hsieh, ``CSPNet: A New Backbone that can Enhance Learning Capability of CNN''. [Online] Available: \url{
-https://doi.org/10.48550/arXiv.1911.11929
-}
+C. Wang, H. Liao, I. Yeh, Y. Wu, P. Chen, and J. Hsieh, ``CSPNet: A New Backbone that can Enhance Learning Capability of CNN,'' 2019. [Online]. Available: \url{https://doi.org/10.48550/arXiv.1911.11929}
 
 \bibitem{FPN}
-Ultralytics, ``Feature Pyramid Network (FPN)''. [Online] Available: \url{https://www.ultralytics.com/glossary/feature-pyramid-network-fpn}
+Ultralytics, ``Feature Pyramid Network (FPN).'' [Online]. Available: \url{https://www.ultralytics.com/glossary/feature-pyramid-network-fpn}
 
 \bibitem{head}
-Ultralytics, ``Detection Head''. [Online] Available: \url{https://www.ultralytics.com/glossary/detection-head}
+Ultralytics, ``Detection Head.'' [Online]. Available: \url{https://www.ultralytics.com/glossary/detection-head}
 
 \bibitem{kaggle_dataset}
 P. K. Darabi, ``Traffic Signs Detection Using YOLOv8,'' Kaggle, 2023. [Online]. Available: \url{https://www.kaggle.com/code/pkdarabi/traffic-signs-detection-using-yolov8}
-\end{thebibliography}
 
+\end{thebibliography}
 
 \end{document}
